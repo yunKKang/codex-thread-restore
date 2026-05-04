@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Self-contained tests for restore.py."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+RESTORE = ROOT / "restore.py"
+
+
+def run(codex_home: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "CODEX_HOME": str(codex_home)}
+    return subprocess.run(
+        [sys.executable, str(RESTORE), *args],
+        check=True,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+
+def make_home() -> Path:
+    root = Path(tempfile.mkdtemp(prefix="thread-restore."))
+    codex_home = root / ".codex"
+    sessions = codex_home / "sessions" / "2026"
+    sessions.mkdir(parents=True)
+    (codex_home / "config.toml").write_text('model_provider = "openai"\n')
+
+    conn = sqlite3.connect(codex_home / "state_5.sqlite")
+    conn.execute(
+        "CREATE TABLE threads ("
+        "id TEXT, title TEXT, model_provider TEXT, archived INTEGER, "
+        "updated_at INTEGER, updated_at_ms INTEGER)"
+    )
+    conn.executemany(
+        "INSERT INTO threads VALUES (?,?,?,?,?,?)",
+        [
+            ("old1", "older hidden", "chatgpt", 0, 100, 100000),
+            ("old2", "newer hidden", "chatgpt", 0, 200, 200000),
+            ("cur1", "already visible", "openai", 0, 300, 300000),
+            ("arch", "archived hidden", "chatgpt", 1, 400, 400000),
+            ("mem", "Memory Writing hidden", "chatgpt", 0, 500, 500000),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    for thread_id, provider in [
+        ("old1", "chatgpt"),
+        ("old2", "chatgpt"),
+        ("cur1", "openai"),
+        ("arch", "chatgpt"),
+        ("mem", "chatgpt"),
+    ]:
+        header = {"type": "session_meta", "payload": {"id": thread_id, "model_provider": provider}}
+        (sessions / f"rollout-{thread_id}.jsonl").write_text(json.dumps(header) + "\n{}\n")
+    return codex_home
+
+
+def provider_map(codex_home: Path) -> dict[str, str]:
+    conn = sqlite3.connect(codex_home / "state_5.sqlite")
+    rows = conn.execute("SELECT id, model_provider FROM threads ORDER BY id").fetchall()
+    conn.close()
+    return dict(rows)
+
+
+def rollout_provider(codex_home: Path, thread_id: str) -> str:
+    path = codex_home / "sessions" / "2026" / f"rollout-{thread_id}.jsonl"
+    return json.loads(path.open().readline())["payload"]["model_provider"]
+
+
+def main():
+    codex_home = make_home()
+    try:
+        before = provider_map(codex_home)
+        dry = run(codex_home, "-n", "1", "--dry-run")
+        assert "Dry run only" in dry.stdout
+        assert provider_map(codex_home) == before
+        dry = run(codex_home, "restore", "-n", "1", "--dry-run")
+        assert "Dry run only" in dry.stdout
+        assert provider_map(codex_home) == before
+
+        run(codex_home, "restore", "-n", "1")
+        providers = provider_map(codex_home)
+        assert providers["cur1"] == "openai"
+        assert providers["old2"] == "chatgpt"
+        assert providers["old1"] == "chatgpt"
+        assert providers["arch"] == "chatgpt"
+        assert providers["mem"] == "chatgpt"
+        assert rollout_provider(codex_home, "cur1") == "openai"
+        assert rollout_provider(codex_home, "old2") == "chatgpt"
+        assert rollout_provider(codex_home, "old1") == "chatgpt"
+        assert rollout_provider(codex_home, "arch") == "chatgpt"
+
+        run(codex_home, "restore", "-n", "2")
+        providers = provider_map(codex_home)
+        assert providers["old2"] == "openai"
+        assert providers["old1"] == "chatgpt"
+        assert providers["arch"] == "chatgpt"
+        assert rollout_provider(codex_home, "old2") == "openai"
+        assert rollout_provider(codex_home, "arch") == "chatgpt"
+        assert (codex_home / "session_index.jsonl").exists()
+        backup_dirs = sorted(path.name for path in (codex_home / "backups").iterdir())
+        assert len(backup_dirs) == 2
+        assert len(set(backup_dirs)) == len(backup_dirs)
+        assert all(name.startswith("restore.") for name in backup_dirs)
+        verify = run(codex_home, "verify-all")
+        assert "Rollout headers: 1 mismatched" in verify.stdout
+    finally:
+        shutil.rmtree(codex_home.parent)
+    print("tests ok")
+
+
+if __name__ == "__main__":
+    main()
