@@ -60,17 +60,18 @@ Set `CODEX_HOME=/path/to/.codex` to target a fixture or non-default Codex home.
 
 ## Install
 
-For a Codex skill install from a local checkout:
+For a Codex skill install:
 
 ```bash
 mkdir -p ~/.codex/skills
-cp -R /path/to/thread-restore ~/.codex/skills/thread-restore
+git clone https://github.com/yunKKang/codex-thread-restore.git ~/.codex/skills/thread-restore
 ```
 
-After publishing on GitHub:
+From a local checkout:
 
 ```bash
-git clone https://github.com/yunKKang/codex-thread-restore.git ~/.codex/skills/thread-restore
+mkdir -p ~/.codex/skills
+cp -R /path/to/codex-thread-restore ~/.codex/skills/thread-restore
 ```
 
 For standalone use, run the script directly from any checkout:
