@@ -4,6 +4,10 @@
 
 恢复切换登录方式或 API provider 后，在 Codex Desktop 侧边栏消失的最近活跃对话。
 
+## 对 Codex 说
+
+> 安装 `https://github.com/yunKKang/codex-thread-restore`，然后执行 dry-run 恢复预览。
+
 ## 安装
 
 ```bash

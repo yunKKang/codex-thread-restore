@@ -5,6 +5,10 @@ English | [中文](README.zh-CN.md)
 Restore recent active Codex Desktop conversations hidden after switching auth
 providers.
 
+## Ask Codex
+
+> Install `https://github.com/yunKKang/codex-thread-restore`, then run a dry-run restore.
+
 ## Install
 
 ```bash
