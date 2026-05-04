@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 - 2026-05-04
+
+- Change default restore scope from 5 to 10 active conversations.
+- Update docs for one-step install and restore.
+
 ## 0.1.0 - 2026-05-04
 
 - Restore recent active, non-archived Codex Desktop conversations after provider switches.

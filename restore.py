@@ -5,7 +5,7 @@ Fixes conversation isolation when switching accounts/API providers by syncing
 three data sources: SQLite threads, session_index.jsonl, and rollout file headers.
 
 Usage:
-    python3 restore.py                  # restore recent 5
+    python3 restore.py                  # restore recent 10
     python3 restore.py restore -n 10    # restore recent 10
     python3 restore.py restore --all    # restore all
     python3 restore.py verify           # check consistency
@@ -34,7 +34,7 @@ SESSIONS_DIR = CODEX_HOME / "sessions"
 ARCHIVED_DIR = CODEX_HOME / "archived_sessions"
 BACKUP_DIR = CODEX_HOME / "backups"
 SKIP_TITLE_PATTERNS = ("%Uncaught Exception%", "%Memory Writing%")
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 
 def get_provider() -> str:
@@ -410,12 +410,12 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("restore", help="Restore conversations")
-    p.add_argument("-n", type=int, default=5, help="Recent active conversation count (default: 5)")
+    p.add_argument("-n", type=int, default=10, help="Recent active conversation count (default: 10)")
     p.add_argument("--all", action="store_true", help="Restore all active conversations")
     p.add_argument("--dry-run", action="store_true", help="Preview without changing files")
 
     v = sub.add_parser("verify", help="Verify selected restore scope")
-    v.add_argument("-n", type=int, default=5, help="Recent active conversation count (default: 5)")
+    v.add_argument("-n", type=int, default=10, help="Recent active conversation count (default: 10)")
     v.add_argument("--all", action="store_true", help="Verify all active conversations")
     sub.add_parser("verify-all", help="Verify all active threads and rollouts")
     sub.add_parser("show", help="List all threads")
