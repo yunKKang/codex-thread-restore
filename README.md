@@ -1,99 +1,44 @@
 # Thread Restore
 
-Restore Codex Desktop conversations that disappear from the sidebar after
-switching between ChatGPT login and API key authentication.
+English | [中文](README.zh-CN.md)
 
-No third-party Python dependencies. MIT licensed.
-
-## Problem
-
-Codex Desktop stores conversation visibility across three local data layers:
-
-1. `~/.codex/state_5.sqlite` thread metadata.
-2. `~/.codex/session_index.jsonl` sidebar index.
-3. `~/.codex/sessions/**/rollout-*.jsonl` session headers.
-
-When the active `model_provider` changes, older conversations can remain tagged
-with the previous provider. The conversations still exist on disk, but the
-sidebar no longer shows them for the current provider.
-
-## Safety Model
-
-This tool is intentionally conservative:
-
-- Default scope is the most recent 5 active, non-archived conversations.
-- Restore candidates always exclude archived conversations.
-- `-n` and `--all` apply to SQLite rows and rollout files using the same thread
-  ID set.
-- Backups are created before any write under `~/.codex/backups/restore.*`.
-- If a restore step fails, the latest backup is copied back automatically.
-- `--dry-run` previews the selected scope without changing files.
-- Hidden/system-like titles such as `Uncaught Exception` and `Memory Writing`
-  are skipped.
-
-Close Codex Desktop before running `restore`; restart it after the command
-finishes.
-
-## Usage
-
-```bash
-# Preview the default restore scope
-python3 restore.py --dry-run
-
-# Restore the recent 5 active conversations
-python3 restore.py
-
-# Restore a larger active scope
-python3 restore.py restore -n 10
-python3 restore.py restore --all
-
-# Verify selected or full active scope
-python3 restore.py verify
-python3 restore.py verify --all
-python3 restore.py verify-all
-
-# Inspect local thread state
-python3 restore.py show
-```
-
-Set `CODEX_HOME=/path/to/.codex` to target a fixture or non-default Codex home.
+Restore recent active Codex Desktop conversations hidden after switching auth
+providers.
 
 ## Install
-
-For a Codex skill install:
 
 ```bash
 mkdir -p ~/.codex/skills
 git clone https://github.com/yunKKang/codex-thread-restore.git ~/.codex/skills/thread-restore
 ```
 
-From a local checkout:
+## Usage
 
 ```bash
-mkdir -p ~/.codex/skills
-cp -R /path/to/codex-thread-restore ~/.codex/skills/thread-restore
+cd ~/.codex/skills/thread-restore
+
+python3 restore.py --dry-run   # preview recent 5 active conversations
+python3 restore.py             # restore recent 5 active conversations
+python3 restore.py restore -n 10
+python3 restore.py restore --all
+python3 restore.py verify
+python3 restore.py show
 ```
 
-For standalone use, run the script directly from any checkout:
+Close Codex Desktop before restore. Restart it after restore.
 
-```bash
-python3 /path/to/thread-restore/restore.py --dry-run
-python3 /path/to/thread-restore/restore.py
-```
+## Safety
 
-## Uninstall
+- Only active, non-archived conversations are selected.
+- Default scope is the recent 5 conversations.
+- Backups are written to `~/.codex/backups/restore.*`.
+- Failed restores copy the latest backup back automatically.
+- No third-party Python dependencies.
 
-```bash
-rm -rf ~/.codex/skills/thread-restore
-```
-
-## Tests
+## Test
 
 ```bash
 python3 test_restore.py
 ```
 
-## Status
-
-This is a local data repair utility for Codex Desktop. Review `--dry-run`
-output before restore and keep Codex Desktop closed while writing data.
+MIT licensed.
