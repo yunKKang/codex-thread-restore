@@ -192,6 +192,36 @@ def make_mixed_provider_home() -> Path:
     return codex_home
 
 
+def make_filename_fallback_home() -> Path:
+    root = Path(tempfile.mkdtemp(prefix="thread-restore-filename."))
+    codex_home = root / ".codex"
+    sessions = codex_home / "sessions" / "2026"
+    sessions.mkdir(parents=True)
+    (codex_home / "config.toml").write_text('model_provider = "openai"\n')
+
+    conn = sqlite3.connect(codex_home / "state_5.sqlite")
+    conn.execute(
+        "CREATE TABLE threads ("
+        "id TEXT, title TEXT, model_provider TEXT, archived INTEGER, "
+        "updated_at INTEGER, updated_at_ms INTEGER)"
+    )
+    rows = [
+        ("filename-hit", "filename fallback", "chatgpt", 0, 100, 100000),
+        ("sqlite-hit", "sqlite fallback", "chatgpt", 0, 999, 999000),
+    ]
+    conn.executemany("INSERT INTO threads VALUES (?,?,?,?,?,?)", rows)
+    conn.commit()
+    conn.close()
+
+    (sessions / "rollout-filename-hit.jsonl").write_text(
+        json.dumps({"timestamp": "2026-05-04T09:00:00.000Z", "payload": {}}) + "\n"
+    )
+    (sessions / "rollout-sqlite-hit.jsonl").write_text(
+        json.dumps({"payload": {"id": "sqlite-hit", "model_provider": "chatgpt"}}) + "\n"
+    )
+    return codex_home
+
+
 def provider_map(codex_home: Path) -> dict[str, str]:
     conn = sqlite3.connect(codex_home / "state_5.sqlite")
     rows = conn.execute("SELECT id, model_provider FROM threads ORDER BY id").fetchall()
@@ -284,6 +314,17 @@ def main():
         assert providers["api-old"] == "openai"
     finally:
         shutil.rmtree(mixed_home.parent)
+
+    filename_home = make_filename_fallback_home()
+    try:
+        verify = run(filename_home, "verify", "-n", "1")
+        assert "[NEEDS RESTORE] SQLite selected scope: 1 provider(s) to update" in verify.stdout
+        run(filename_home, "restore", "-n", "1")
+        providers = provider_map(filename_home)
+        assert providers["filename-hit"] == "openai"
+        assert providers["sqlite-hit"] == "chatgpt"
+    finally:
+        shutil.rmtree(filename_home.parent)
     print("tests ok")
 
 

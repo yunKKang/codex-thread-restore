@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 - 2026-05-04
+
+- Avoid repeated rollout scans during restore and verify.
+- Use rollout filenames as fallback when headers lack thread IDs.
+- Report pending provider updates as `NEEDS RESTORE` in `verify`.
+
 ## 0.1.2 - 2026-05-04
 
 - Rank restore candidates by latest rollout event activity.

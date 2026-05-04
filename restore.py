@@ -34,7 +34,7 @@ SESSIONS_DIR = CODEX_HOME / "sessions"
 ARCHIVED_DIR = CODEX_HOME / "archived_sessions"
 BACKUP_DIR = CODEX_HOME / "backups"
 SKIP_TITLE_PATTERNS = ("%Uncaught Exception%", "%Memory Writing%")
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 
 
 def get_provider() -> str:
@@ -127,6 +127,20 @@ def parse_timestamp(value: str | None) -> int | None:
         return None
 
 
+def thread_id_from_rollout_name(path: Path, thread_ids: set[str]) -> str | None:
+    stem = path.stem
+    candidates = []
+    if stem.startswith("rollout-"):
+        candidates.append(stem.removeprefix("rollout-"))
+        parts = stem.split("-")
+        if len(parts) >= 6:
+            candidates.append("-".join(parts[-5:]))
+    for candidate in candidates:
+        if candidate in thread_ids:
+            return candidate
+    return None
+
+
 def rollout_activity(thread_ids: set[str]) -> dict[str, tuple[Path, int]]:
     activity: dict[str, tuple[Path, int]] = {}
     for d in (SESSIONS_DIR, ARCHIVED_DIR):
@@ -134,7 +148,7 @@ def rollout_activity(thread_ids: set[str]) -> dict[str, tuple[Path, int]]:
             continue
         for f in d.rglob("*.jsonl"):
             try:
-                thread_id = None
+                thread_id = thread_id_from_rollout_name(f, thread_ids)
                 last_seen = None
                 with f.open(encoding="utf-8") as handle:
                     for line in handle:
@@ -155,8 +169,8 @@ def rollout_activity(thread_ids: set[str]) -> dict[str, tuple[Path, int]]:
     return activity
 
 
-def restore_candidates(conn: sqlite3.Connection, limit: int | None) -> list[tuple[str, str, int]]:
-    rows = conn.execute(
+def active_threads(conn: sqlite3.Connection) -> list[tuple[str, str, int]]:
+    return conn.execute(
         "SELECT id, title, updated_at FROM threads "
         "WHERE archived=0 "
         "AND title NOT LIKE ? "
@@ -164,7 +178,11 @@ def restore_candidates(conn: sqlite3.Connection, limit: int | None) -> list[tupl
         "ORDER BY updated_at DESC",
         SKIP_TITLE_PATTERNS,
     ).fetchall()
-    activity = rollout_activity({tid for tid, _title, _updated_at in rows})
+
+
+def restore_candidates(
+    rows: list[tuple[str, str, int]], limit: int | None, activity: dict[str, tuple[Path, int]]
+) -> list[tuple[str, str, int]]:
     ranked = [
         (tid, title, activity.get(tid, (None, updated_at))[1])
         for tid, title, updated_at in rows
@@ -222,8 +240,8 @@ def rebuild_index(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
-def find_rollout_files(thread_ids: set[str]) -> list[Path]:
-    return [path for path, _last_seen in rollout_activity(thread_ids).values()]
+def find_rollout_files(thread_ids: set[str], activity: dict[str, tuple[Path, int]]) -> list[Path]:
+    return [path for thread_id, (path, _last_seen) in activity.items() if thread_id in thread_ids]
 
 
 def fix_rollout_headers(provider: str, rollout_files: list[Path]) -> int:
@@ -259,9 +277,11 @@ def cmd_restore(args: argparse.Namespace):
 
     conn = get_db()
     require_schema(conn)
-    threads = restore_candidates(conn, limit)
+    active_rows = active_threads(conn)
+    activity = rollout_activity({tid for tid, _title, _updated_at in active_rows})
+    threads = restore_candidates(active_rows, limit, activity)
     thread_ids = {tid for tid, _title, _updated_at in threads}
-    rollout_files = find_rollout_files(thread_ids)
+    rollout_files = find_rollout_files(thread_ids, activity)
 
     scope = "all active conversations" if args.all else f"recent {args.n} active conversation(s)"
     print(f"Scope: {scope}")
@@ -308,7 +328,9 @@ def cmd_verify(args: argparse.Namespace):
     limit = None if args.all else args.n
     conn = get_db()
     require_schema(conn)
-    threads = restore_candidates(conn, limit)
+    active_rows = active_threads(conn)
+    activity = rollout_activity({tid for tid, _title, _updated_at in active_rows})
+    threads = restore_candidates(active_rows, limit, activity)
     thread_ids = {tid for tid, _title, _updated_at in threads}
     ok = True
 
@@ -320,10 +342,8 @@ def cmd_verify(args: argparse.Namespace):
         ).fetchone()[0]
     else:
         n = 0
-    tag = "OK" if n == 0 else "FAIL"
-    print(f"  [{tag}] SQLite selected scope: {n} mismatched provider(s)")
-    if n:
-        ok = False
+    tag = "OK" if n == 0 else "NEEDS RESTORE"
+    print(f"  [{tag}] SQLite selected scope: {n} provider(s) to update")
 
     if INDEX_PATH.exists():
         idx_rows = []
@@ -345,7 +365,7 @@ def cmd_verify(args: argparse.Namespace):
         ok = False
 
     mismatch = 0
-    rollout_files = find_rollout_files(thread_ids)
+    rollout_files = find_rollout_files(thread_ids, activity)
     for f in rollout_files:
         try:
             meta = json.loads(f.open().readline())
@@ -396,10 +416,11 @@ def cmd_verify_all(_args: argparse.Namespace):
         print("  [FAIL] session_index.jsonl missing")
         ok = False
 
-    active_rows = restore_candidates(conn, None)
+    active_rows = active_threads(conn)
     active_ids = {tid for tid, _title, _updated_at in active_rows}
+    activity = rollout_activity(active_ids)
     mismatch = 0
-    for f in find_rollout_files(active_ids):
+    for f in find_rollout_files(active_ids, activity):
         try:
             meta = json.loads(f.open().readline())
             if meta.get("payload", {}).get("model_provider") != provider:
