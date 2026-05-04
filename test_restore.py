@@ -65,6 +65,35 @@ def make_home() -> Path:
     return codex_home
 
 
+def make_small_home() -> Path:
+    root = Path(tempfile.mkdtemp(prefix="thread-restore-small."))
+    codex_home = root / ".codex"
+    sessions = codex_home / "sessions" / "2026"
+    sessions.mkdir(parents=True)
+    (codex_home / "config.toml").write_text('model_provider = "openai"\n')
+
+    conn = sqlite3.connect(codex_home / "state_5.sqlite")
+    conn.execute(
+        "CREATE TABLE threads ("
+        "id TEXT, title TEXT, model_provider TEXT, archived INTEGER, "
+        "updated_at INTEGER, updated_at_ms INTEGER)"
+    )
+    rows = [
+        ("a1", "active one", "chatgpt", 0, 100, 100000),
+        ("a2", "active two", "chatgpt", 0, 200, 200000),
+        ("a3", "active three", "chatgpt", 0, 300, 300000),
+        ("arch", "archived", "chatgpt", 1, 400, 400000),
+    ]
+    conn.executemany("INSERT INTO threads VALUES (?,?,?,?,?,?)", rows)
+    conn.commit()
+    conn.close()
+
+    for thread_id, _title, provider, _archived, _updated_at, _updated_at_ms in rows:
+        header = {"type": "session_meta", "payload": {"id": thread_id, "model_provider": provider}}
+        (sessions / f"rollout-{thread_id}.jsonl").write_text(json.dumps(header) + "\n{}\n")
+    return codex_home
+
+
 def provider_map(codex_home: Path) -> dict[str, str]:
     conn = sqlite3.connect(codex_home / "state_5.sqlite")
     rows = conn.execute("SELECT id, model_provider FROM threads ORDER BY id").fetchall()
@@ -75,6 +104,13 @@ def provider_map(codex_home: Path) -> dict[str, str]:
 def rollout_provider(codex_home: Path, thread_id: str) -> str:
     path = codex_home / "sessions" / "2026" / f"rollout-{thread_id}.jsonl"
     return json.loads(path.open().readline())["payload"]["model_provider"]
+
+
+def updated_at_map(codex_home: Path) -> dict[str, int]:
+    conn = sqlite3.connect(codex_home / "state_5.sqlite")
+    rows = conn.execute("SELECT id, updated_at FROM threads ORDER BY id").fetchall()
+    conn.close()
+    return dict(rows)
 
 
 def main():
@@ -116,6 +152,20 @@ def main():
         assert "Rollout headers: 1 mismatched" in verify.stdout
     finally:
         shutil.rmtree(codex_home.parent)
+
+    small_home = make_small_home()
+    try:
+        run(small_home)
+        providers = provider_map(small_home)
+        updated_at = updated_at_map(small_home)
+        assert providers["a1"] == "openai"
+        assert providers["a2"] == "openai"
+        assert providers["a3"] == "openai"
+        assert providers["arch"] == "chatgpt"
+        assert updated_at["a3"] > updated_at["a2"] > updated_at["a1"]
+        assert updated_at["arch"] == 400
+    finally:
+        shutil.rmtree(small_home.parent)
     print("tests ok")
 
 

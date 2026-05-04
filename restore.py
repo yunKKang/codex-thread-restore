@@ -148,16 +148,19 @@ def fix_provider(conn: sqlite3.Connection, provider: str, thread_ids: set[str]) 
     return cur.rowcount
 
 
-def fix_timestamps(conn: sqlite3.Connection, thread_ids: set[str]) -> int:
-    if not thread_ids:
+def fix_timestamps(conn: sqlite3.Connection, threads: list[tuple[str, str, int]]) -> int:
+    if not threads:
         return 0
     now = int(time.time())
-    cur = conn.execute(
-        "UPDATE threads SET updated_at=?, updated_at_ms=? "
-        f"WHERE id IN ({placeholders(thread_ids)})",
-        (now, now * 1000, *thread_ids),
-    )
-    return cur.rowcount
+    updated = 0
+    for offset, (thread_id, _title, _updated_at) in enumerate(threads):
+        promoted = now - offset
+        cur = conn.execute(
+            "UPDATE threads SET updated_at=?, updated_at_ms=? WHERE id=?",
+            (promoted, promoted * 1000, thread_id),
+        )
+        updated += cur.rowcount
+    return updated
 
 
 def rebuild_index(conn: sqlite3.Connection) -> int:
@@ -246,7 +249,7 @@ def cmd_restore(args: argparse.Namespace):
         n = fix_provider(conn, provider, thread_ids)
         print(f"[1/4] SQLite provider: {n} updated")
 
-        n = fix_timestamps(conn, thread_ids)
+        n = fix_timestamps(conn, threads)
         print(f"[2/4] Timestamps: {n} promoted")
 
         n = rebuild_index(conn)
