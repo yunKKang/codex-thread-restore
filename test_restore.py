@@ -60,7 +60,17 @@ def make_home() -> Path:
         ("arch", "chatgpt"),
         ("mem", "chatgpt"),
     ]:
-        header = {"type": "session_meta", "payload": {"id": thread_id, "model_provider": provider}}
+        header = {
+            "timestamp": {
+                "old1": "2026-05-04T00:01:00.000Z",
+                "old2": "2026-05-04T00:02:00.000Z",
+                "cur1": "2026-05-04T00:03:00.000Z",
+                "arch": "2026-05-04T00:04:00.000Z",
+                "mem": "2026-05-04T00:05:00.000Z",
+            }[thread_id],
+            "type": "session_meta",
+            "payload": {"id": thread_id, "model_provider": provider},
+        }
         (sessions / f"rollout-{thread_id}.jsonl").write_text(json.dumps(header) + "\n{}\n")
     return codex_home
 
@@ -89,7 +99,95 @@ def make_small_home() -> Path:
     conn.close()
 
     for thread_id, _title, provider, _archived, _updated_at, _updated_at_ms in rows:
-        header = {"type": "session_meta", "payload": {"id": thread_id, "model_provider": provider}}
+        header = {
+            "timestamp": {
+                "a1": "2026-05-04T00:01:00.000Z",
+                "a2": "2026-05-04T00:02:00.000Z",
+                "a3": "2026-05-04T00:03:00.000Z",
+                "arch": "2026-05-04T00:04:00.000Z",
+            }[thread_id],
+            "type": "session_meta",
+            "payload": {"id": thread_id, "model_provider": provider},
+        }
+        (sessions / f"rollout-{thread_id}.jsonl").write_text(json.dumps(header) + "\n{}\n")
+    return codex_home
+
+
+def make_rollout_activity_home() -> Path:
+    root = Path(tempfile.mkdtemp(prefix="thread-restore-activity."))
+    codex_home = root / ".codex"
+    sessions = codex_home / "sessions" / "2026"
+    sessions.mkdir(parents=True)
+    (codex_home / "config.toml").write_text('model_provider = "openai"\n')
+
+    conn = sqlite3.connect(codex_home / "state_5.sqlite")
+    conn.execute(
+        "CREATE TABLE threads ("
+        "id TEXT, title TEXT, model_provider TEXT, archived INTEGER, "
+        "updated_at INTEGER, updated_at_ms INTEGER)"
+    )
+    rows = [
+        ("stale-meta", "recent rollout", "chatgpt", 0, 100, 100000),
+        ("fresh-meta", "older rollout", "chatgpt", 0, 999, 999000),
+    ]
+    conn.executemany("INSERT INTO threads VALUES (?,?,?,?,?,?)", rows)
+    conn.commit()
+    conn.close()
+
+    rollouts = {
+        "stale-meta": ["2026-05-04T01:00:00.000Z", "2026-05-04T09:00:00.000Z"],
+        "fresh-meta": ["2026-05-04T02:00:00.000Z"],
+    }
+    for thread_id, timestamps in rollouts.items():
+        lines = [
+            json.dumps(
+                {
+                    "timestamp": timestamps[0],
+                    "type": "session_meta",
+                    "payload": {"id": thread_id, "model_provider": "chatgpt"},
+                }
+            )
+        ]
+        lines.extend(json.dumps({"timestamp": ts, "payload": {}}) for ts in timestamps[1:])
+        (sessions / f"rollout-{thread_id}.jsonl").write_text("\n".join(lines) + "\n")
+    return codex_home
+
+
+def make_mixed_provider_home() -> Path:
+    root = Path(tempfile.mkdtemp(prefix="thread-restore-mixed."))
+    codex_home = root / ".codex"
+    sessions = codex_home / "sessions" / "2026"
+    sessions.mkdir(parents=True)
+    (codex_home / "config.toml").write_text('model_provider = "codex"\n')
+
+    conn = sqlite3.connect(codex_home / "state_5.sqlite")
+    conn.execute(
+        "CREATE TABLE threads ("
+        "id TEXT, title TEXT, model_provider TEXT, archived INTEGER, "
+        "updated_at INTEGER, updated_at_ms INTEGER)"
+    )
+    rows = [
+        ("api-recent", "api recent", "openai", 0, 100, 100000),
+        ("login-recent", "login recent", "chatgpt", 0, 200, 200000),
+        ("codex-recent", "codex recent", "codex", 0, 300, 300000),
+        ("api-old", "api old", "openai", 0, 400, 400000),
+    ]
+    conn.executemany("INSERT INTO threads VALUES (?,?,?,?,?,?)", rows)
+    conn.commit()
+    conn.close()
+
+    timestamps = {
+        "api-old": "2026-05-04T00:01:00.000Z",
+        "api-recent": "2026-05-04T00:04:00.000Z",
+        "login-recent": "2026-05-04T00:03:00.000Z",
+        "codex-recent": "2026-05-04T00:02:00.000Z",
+    }
+    for thread_id, _title, provider, _archived, _updated_at, _updated_at_ms in rows:
+        header = {
+            "timestamp": timestamps[thread_id],
+            "type": "session_meta",
+            "payload": {"id": thread_id, "model_provider": provider},
+        }
         (sessions / f"rollout-{thread_id}.jsonl").write_text(json.dumps(header) + "\n{}\n")
     return codex_home
 
@@ -166,6 +264,26 @@ def main():
         assert updated_at["arch"] == 400
     finally:
         shutil.rmtree(small_home.parent)
+
+    activity_home = make_rollout_activity_home()
+    try:
+        run(activity_home, "restore", "-n", "1")
+        providers = provider_map(activity_home)
+        assert providers["stale-meta"] == "openai"
+        assert providers["fresh-meta"] == "chatgpt"
+    finally:
+        shutil.rmtree(activity_home.parent)
+
+    mixed_home = make_mixed_provider_home()
+    try:
+        run(mixed_home, "restore", "-n", "3")
+        providers = provider_map(mixed_home)
+        assert providers["api-recent"] == "codex"
+        assert providers["login-recent"] == "codex"
+        assert providers["codex-recent"] == "codex"
+        assert providers["api-old"] == "openai"
+    finally:
+        shutil.rmtree(mixed_home.parent)
     print("tests ok")
 
 

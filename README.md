@@ -34,6 +34,8 @@ Close Codex Desktop before restore. Restart it after restore.
 ## Safety
 
 - Only active, non-archived conversations are selected.
+- Recency is based on the latest rollout event, with SQLite `updated_at` as fallback.
+- Conversations from all providers are ranked together.
 - Default scope is the recent 10 conversations, or all active conversations if fewer than 10 exist.
 - Backups are written to `~/.codex/backups/restore.*`.
 - Failed restores copy the latest backup back automatically.

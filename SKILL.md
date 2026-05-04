@@ -22,5 +22,7 @@ python3 ~/.codex/skills/thread-restore/restore.py show
 
 - Run `restore.py` directly unless the user asks to preview.
 - Restore only active, non-archived conversations.
+- Rank recency by the latest rollout event; use SQLite timestamps only as fallback.
+- Rank all providers together; do not split account/API conversations into separate buckets.
 - Tell the user to close Codex Desktop before restore and restart it after.
 - Backups are created under `~/.codex/backups/restore.*`.

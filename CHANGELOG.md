@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 - 2026-05-04
+
+- Rank restore candidates by latest rollout event activity.
+- Keep SQLite `updated_at` as fallback when rollout activity is unavailable.
+- Rank conversations from all providers together.
+
 ## 0.1.1 - 2026-05-04
 
 - Change default restore scope from 5 to 10 active conversations.

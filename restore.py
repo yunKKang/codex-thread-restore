@@ -34,7 +34,7 @@ SESSIONS_DIR = CODEX_HOME / "sessions"
 ARCHIVED_DIR = CODEX_HOME / "archived_sessions"
 BACKUP_DIR = CODEX_HOME / "backups"
 SKIP_TITLE_PATTERNS = ("%Uncaught Exception%", "%Memory Writing%")
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 
 def get_provider() -> str:
@@ -118,19 +118,59 @@ def atomic_write(path: Path, content: str):
         raise
 
 
+def parse_timestamp(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+def rollout_activity(thread_ids: set[str]) -> dict[str, tuple[Path, int]]:
+    activity: dict[str, tuple[Path, int]] = {}
+    for d in (SESSIONS_DIR, ARCHIVED_DIR):
+        if not d.exists():
+            continue
+        for f in d.rglob("*.jsonl"):
+            try:
+                thread_id = None
+                last_seen = None
+                with f.open(encoding="utf-8") as handle:
+                    for line in handle:
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        payload = event.get("payload", {})
+                        if thread_id is None and payload.get("id") in thread_ids:
+                            thread_id = payload["id"]
+                        timestamp = parse_timestamp(event.get("timestamp"))
+                        if timestamp is not None:
+                            last_seen = timestamp
+                if thread_id is not None and last_seen is not None:
+                    activity[thread_id] = (f, last_seen)
+            except OSError as e:
+                print(f"  WARN: {f.name}: {e}", file=sys.stderr)
+    return activity
+
+
 def restore_candidates(conn: sqlite3.Connection, limit: int | None) -> list[tuple[str, str, int]]:
-    sql = (
+    rows = conn.execute(
         "SELECT id, title, updated_at FROM threads "
         "WHERE archived=0 "
         "AND title NOT LIKE ? "
         "AND title NOT LIKE ? "
-        "ORDER BY updated_at DESC"
-    )
-    params: tuple[object, ...] = SKIP_TITLE_PATTERNS
-    if limit is not None:
-        sql += " LIMIT ?"
-        params = (*params, limit)
-    return conn.execute(sql, params).fetchall()
+        "ORDER BY updated_at DESC",
+        SKIP_TITLE_PATTERNS,
+    ).fetchall()
+    activity = rollout_activity({tid for tid, _title, _updated_at in rows})
+    ranked = [
+        (tid, title, activity.get(tid, (None, updated_at))[1])
+        for tid, title, updated_at in rows
+    ]
+    ranked.sort(key=lambda row: row[2], reverse=True)
+    return ranked if limit is None else ranked[:limit]
 
 
 def placeholders(values: set[str] | list[str]) -> str:
@@ -183,18 +223,7 @@ def rebuild_index(conn: sqlite3.Connection) -> int:
 
 
 def find_rollout_files(thread_ids: set[str]) -> list[Path]:
-    files: list[Path] = []
-    for d in (SESSIONS_DIR, ARCHIVED_DIR):
-        if not d.exists():
-            continue
-        for f in d.rglob("*.jsonl"):
-            try:
-                meta = json.loads(f.open().readline())
-                if meta.get("payload", {}).get("id") in thread_ids:
-                    files.append(f)
-            except (json.JSONDecodeError, OSError) as e:
-                print(f"  WARN: {f.name}: {e}", file=sys.stderr)
-    return files
+    return [path for path, _last_seen in rollout_activity(thread_ids).values()]
 
 
 def fix_rollout_headers(provider: str, rollout_files: list[Path]) -> int:

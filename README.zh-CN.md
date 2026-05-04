@@ -33,6 +33,8 @@ python3 restore.py show
 ## 安全边界
 
 - 只选择活跃、未归档对话。
+- 最近活跃按 rollout 最后一条事件判断，SQLite `updated_at` 仅作兜底。
+- 所有 provider 的对话放在一起全局排序。
 - 默认范围是最近 10 个对话；如果不足 10 个，则全部恢复。
 - 备份写入 `~/.codex/backups/restore.*`。
 - 恢复失败时会自动拷回最新备份。
