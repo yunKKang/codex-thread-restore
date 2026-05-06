@@ -12,18 +12,24 @@ account, or API provider.
 
 ```bash
 python3 ~/.codex/skills/thread-restore/restore.py
+python3 ~/.codex/skills/thread-restore/restore.py now
 python3 ~/.codex/skills/thread-restore/restore.py restore -n 10
 python3 ~/.codex/skills/thread-restore/restore.py restore --all
 python3 ~/.codex/skills/thread-restore/restore.py verify
 python3 ~/.codex/skills/thread-restore/restore.py show
+python3 ~/.codex/skills/thread-restore/restore.py auto
 ```
 
 ## Rules
 
-- Run `restore.py` directly unless the user asks to preview.
+- Run `restore.py` directly unless the user asks to preview; it is a one-shot restore
+  of all active conversations.
 - Restore only active, non-archived conversations.
 - Rank recency by the latest rollout event; use SQLite timestamps only as fallback.
 - Rank all providers together; do not split account/API conversations into separate buckets.
 - Match rollout files by header ID or filename.
-- Tell the user to close Codex Desktop before restore and restart it after.
+- Tell the user to restart Codex Desktop after restore.
 - Backups are created under `~/.codex/backups/restore.*`.
+- `auto` is only a compatibility alias for `now`; do not install background polling.
+- Works on macOS and Windows when `CODEX_HOME` or the default `~/.codex` directory
+  points to the Codex data folder.

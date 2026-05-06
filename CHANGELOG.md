@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 - 2026-05-06
+
+- Change the default command to a one-shot restore of all active conversations.
+- Add `now` for explicit one-shot restore; keep `auto` as a compatibility alias.
+- Avoid creating backups when one-shot checks find the selected scope already consistent.
+- Document the no-background workflow and Windows usage.
+
 ## 0.1.3 - 2026-05-04
 
 - Avoid repeated rollout scans during restore and verify.

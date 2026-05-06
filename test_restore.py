@@ -16,8 +16,12 @@ ROOT = Path(__file__).resolve().parent
 RESTORE = ROOT / "restore.py"
 
 
-def run(codex_home: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def run(
+    codex_home: Path, *args: str, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "CODEX_HOME": str(codex_home)}
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, str(RESTORE), *args],
         check=True,
@@ -294,6 +298,31 @@ def main():
         assert updated_at["arch"] == 400
     finally:
         shutil.rmtree(small_home.parent)
+
+    auto_home = make_small_home()
+    try:
+        run(auto_home, "now")
+        providers = provider_map(auto_home)
+        assert providers["a1"] == "openai"
+        assert providers["a2"] == "openai"
+        assert providers["a3"] == "openai"
+        backups = list((auto_home / "backups").iterdir())
+        assert len(backups) == 1
+        second = run(auto_home, "auto")
+        assert "already consistent" in second.stdout
+        assert len(list((auto_home / "backups").iterdir())) == 1
+    finally:
+        shutil.rmtree(auto_home.parent)
+
+    default_home = make_small_home()
+    try:
+        run(default_home)
+        providers = provider_map(default_home)
+        assert providers["a1"] == "openai"
+        assert providers["a2"] == "openai"
+        assert providers["a3"] == "openai"
+    finally:
+        shutil.rmtree(default_home.parent)
 
     activity_home = make_rollout_activity_home()
     try:
