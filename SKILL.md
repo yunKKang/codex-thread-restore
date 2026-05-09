@@ -35,8 +35,9 @@ python3 ~/.codex/skills/thread-restore/restore.py uninstall-auto
 - Backups are created under `~/.codex/backups/restore.*`.
 - `auto` is only a compatibility alias for `now`.
 - Install startup automation only when explicitly requested. On macOS,
-  `install-auto` creates a LaunchAgent that runs the monitor at login and
-  restores all active conversations after Codex starts or provider data changes.
-- Use `auto-status` to inspect the LaunchAgent and `uninstall-auto` to remove it.
+  `install-auto` creates a LaunchAgent; on Windows, it creates a Task Scheduler
+  logon task. Both run the monitor and restore all active conversations after
+  Codex starts or provider data changes.
+- Use `auto-status` to inspect startup automation and `uninstall-auto` to remove it.
 - Works on macOS and Windows when `CODEX_HOME` or the default `~/.codex` directory
   points to the Codex data folder.

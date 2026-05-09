@@ -38,7 +38,7 @@ Restart Codex Desktop after restore.
 The default command runs once and exits. It first checks whether anything needs restoration,
 so consistent runs do not create new backups.
 
-For automatic sync after login, explicitly install the macOS LaunchAgent:
+For automatic sync after login, explicitly install the system startup task:
 
 ```bash
 python3 restore.py install-auto
@@ -46,19 +46,26 @@ python3 restore.py auto-status
 python3 restore.py uninstall-auto
 ```
 
-`install-auto` writes `~/Library/LaunchAgents/com.codex.thread-restore.plist`.
-It starts a lightweight monitor at login. When Codex is running and provider/index data
-changes, the monitor runs `now` once and restores all active conversations. Logs are written
-to `~/.codex/logs/thread-restore.auto.log` and `~/.codex/logs/thread-restore.auto.err.log`.
+On macOS, `install-auto` writes
+`~/Library/LaunchAgents/com.codex.thread-restore.plist`. On Windows, it creates the
+`Codex Thread Restore` logon task and writes the `~/.codex/thread-restore-auto.cmd`
+runner.
 
-This is a macOS user LaunchAgent, not an internal Codex Desktop startup hook. Windows keeps
-the manual one-shot workflow.
+Both platforms start a lightweight monitor at login. When Codex is running and provider/index
+data changes, the monitor runs `now` once and restores all active conversations. Logs are
+written to `~/.codex/logs/thread-restore.auto.log` and
+`~/.codex/logs/thread-restore.auto.err.log`.
+
+This is still a user-level system startup task, not an internal Codex Desktop startup hook.
+The skill cannot inject into Codex Desktop's internal startup lifecycle unless the desktop app
+adds an extension point.
 
 On Windows, run the same commands with the Python launcher:
 
 ```powershell
 py -3 restore.py
 py -3 restore.py now
+py -3 restore.py install-auto
 py -3 restore.py verify
 ```
 
@@ -70,7 +77,7 @@ py -3 restore.py verify
 - Rollout files can be matched by header ID or filename.
 - Default scope is all active conversations; use `restore -n 10` for an explicit recent subset.
 - `auto` is only a compatibility alias for `now`.
-- `install-auto` creates a background LaunchAgent only when the user runs it explicitly.
+- `install-auto` creates a background startup task only when the user runs it explicitly.
 - Backups are written to `~/.codex/backups/restore.*`.
 - Failed restores copy the latest backup back automatically.
 - No third-party Python dependencies.

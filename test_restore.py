@@ -409,7 +409,7 @@ def main():
                 "THREAD_RESTORE_ALLOW_NON_DARWIN": "1",
             },
         )
-        assert "Installed: yes" in status.stdout
+        assert "LaunchAgent installed: yes" in status.stdout
 
         uninstall = run(
             launch_home,
@@ -425,6 +425,51 @@ def main():
     finally:
         shutil.rmtree(launch_home.parent)
         shutil.rmtree(launch_root)
+
+    windows_home = make_small_home()
+    try:
+        install = run(
+            windows_home,
+            "install-auto",
+            "--interval",
+            "20",
+            "--cooldown",
+            "60",
+            extra_env={
+                "THREAD_RESTORE_ALLOW_WINDOWS": "1",
+                "THREAD_RESTORE_SKIP_SCHTASKS": "1",
+            },
+        )
+        assert "Installed auto restore scheduled task" in install.stdout
+        runner = windows_home / "thread-restore-auto.cmd"
+        assert runner.exists()
+        runner_text = runner.read_text()
+        assert f"set \"CODEX_HOME={windows_home}\"" in runner_text
+        assert "monitor --interval 20 --cooldown 60" in runner_text
+        assert "thread-restore.auto.log" in runner_text
+
+        status = run(
+            windows_home,
+            "auto-status",
+            extra_env={
+                "THREAD_RESTORE_ALLOW_WINDOWS": "1",
+                "THREAD_RESTORE_SKIP_SCHTASKS": "1",
+            },
+        )
+        assert "Windows runner installed: yes" in status.stdout
+
+        uninstall = run(
+            windows_home,
+            "uninstall-auto",
+            extra_env={
+                "THREAD_RESTORE_ALLOW_WINDOWS": "1",
+                "THREAD_RESTORE_SKIP_SCHTASKS": "1",
+            },
+        )
+        assert "Removed auto restore scheduled task runner: yes" in uninstall.stdout
+        assert not runner.exists()
+    finally:
+        shutil.rmtree(windows_home.parent)
 
     invalid_launch_home = make_small_home()
     invalid_root = Path(tempfile.mkdtemp(prefix="thread-restore-invalid-launch."))

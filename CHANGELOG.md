@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 - 2026-05-09
+
+- Add Windows `install-auto` support via Task Scheduler logon task.
+- Generate a `thread-restore-auto.cmd` runner with `CODEX_HOME` and log paths.
+- Use `tasklist` for Codex process detection on Windows.
+- Update docs to distinguish system startup tasks from an internal Desktop hook.
+
 ## 0.3.0 - 2026-05-09
 
 - Add explicit macOS `install-auto`, `auto-status`, and `uninstall-auto` commands.

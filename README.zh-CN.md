@@ -37,7 +37,7 @@ python3 restore.py uninstall-auto
 
 默认命令是一次性执行。它会先检查是否真的需要恢复；如果已经一致，不会创建新备份。
 
-如需在每次登录后自动同步，可在 macOS 上显式安装 LaunchAgent：
+如需在每次登录后自动同步，可显式安装系统级启动任务：
 
 ```bash
 python3 restore.py install-auto
@@ -45,19 +45,23 @@ python3 restore.py auto-status
 python3 restore.py uninstall-auto
 ```
 
-`install-auto` 会安装 `~/Library/LaunchAgents/com.codex.thread-restore.plist`。
-它在登录时启动一个轻量 monitor，检测到 Codex 正在运行且 provider/索引数据变化后，
+macOS 上，`install-auto` 会安装
+`~/Library/LaunchAgents/com.codex.thread-restore.plist`。Windows 上，它会创建
+`Codex Thread Restore` 登录任务，并写入 `~/.codex/thread-restore-auto.cmd` runner。
+
+两端都会在登录时启动一个轻量 monitor，检测到 Codex 正在运行且 provider/索引数据变化后，
 自动执行一次 `now`，恢复全部活跃对话。日志写入 `~/.codex/logs/thread-restore.auto.log`
 和 `~/.codex/logs/thread-restore.auto.err.log`。
 
-这不是 Codex Desktop 内部启动 hook，而是 macOS 用户级 LaunchAgent；Windows 端仍保持
-手动一次性恢复。
+这仍然不是 Codex Desktop 内部启动 hook，而是用户级系统启动任务。除非 Codex Desktop
+上游提供扩展点，否则 skill 无法真正注入桌面端内部启动生命周期。
 
 Windows 端可在同一目录运行：
 
 ```powershell
 py -3 restore.py
 py -3 restore.py now
+py -3 restore.py install-auto
 py -3 restore.py verify
 ```
 
@@ -69,7 +73,7 @@ py -3 restore.py verify
 - rollout 文件可通过 header ID 或文件名匹配线程。
 - 默认范围是全部活跃对话；`restore -n 10` 可显式恢复最近 10 个。
 - `auto` 只是 `now` 的兼容别名。
-- `install-auto` 只有用户显式执行时才会创建后台 LaunchAgent。
+- `install-auto` 只有用户显式执行时才会创建后台启动任务。
 - 备份写入 `~/.codex/backups/restore.*`。
 - 恢复失败时会自动拷回最新备份。
 - 无第三方 Python 依赖。

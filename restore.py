@@ -45,8 +45,10 @@ LAUNCH_AGENTS_DIR = Path(
     os.environ.get("THREAD_RESTORE_LAUNCH_AGENTS_DIR", Path.home() / "Library" / "LaunchAgents")
 ).expanduser()
 AUTO_PLIST_PATH = LAUNCH_AGENTS_DIR / f"{AUTO_LABEL}.plist"
+WINDOWS_TASK_NAME = "Codex Thread Restore"
+WINDOWS_RUNNER_PATH = CODEX_HOME / "thread-restore-auto.cmd"
 SKIP_TITLE_PATTERNS = ("%Uncaught Exception%", "%Memory Writing%")
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 
 def get_provider() -> str:
@@ -622,6 +624,17 @@ def cmd_auto(args: argparse.Namespace):
 
 
 def codex_running() -> bool:
+    if sys.platform == "win32":
+        try:
+            proc = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq Codex.exe", "/NH"],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+        except OSError:
+            return False
+        return proc.returncode == 0 and "Codex.exe" in proc.stdout
     try:
         proc = subprocess.run(
             ["pgrep", "-x", "Codex"],
@@ -742,6 +755,63 @@ def launchctl_bootout(plist_path: Path) -> bool:
     return proc.returncode == 0
 
 
+def windows_runner(interval: int, cooldown: int) -> str:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    return (
+        "@echo off\r\n"
+        f"set \"CODEX_HOME={CODEX_HOME}\"\r\n"
+        f"\"{sys.executable}\" \"{Path(__file__).resolve()}\" monitor "
+        f"--interval {interval} --cooldown {cooldown} "
+        f">> \"{LOG_DIR / 'thread-restore.auto.log'}\" "
+        f"2>> \"{LOG_DIR / 'thread-restore.auto.err.log'}\"\r\n"
+    )
+
+
+def schtasks_create(runner_path: Path) -> bool:
+    if sys.platform != "win32" or os.environ.get("THREAD_RESTORE_SKIP_SCHTASKS") == "1":
+        return False
+    subprocess.run(
+        ["schtasks", "/Delete", "/TN", WINDOWS_TASK_NAME, "/F"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    proc = subprocess.run(
+        [
+            "schtasks",
+            "/Create",
+            "/TN",
+            WINDOWS_TASK_NAME,
+            "/TR",
+            str(runner_path),
+            "/SC",
+            "ONLOGON",
+            "/RL",
+            "LIMITED",
+            "/F",
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        print(proc.stderr.strip() or proc.stdout.strip(), file=sys.stderr)
+        return False
+    return True
+
+
+def schtasks_delete() -> bool:
+    if sys.platform != "win32" or os.environ.get("THREAD_RESTORE_SKIP_SCHTASKS") == "1":
+        return False
+    proc = subprocess.run(
+        ["schtasks", "/Delete", "/TN", WINDOWS_TASK_NAME, "/F"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return proc.returncode == 0
+
+
 def auto_plist(interval: int, cooldown: int) -> dict[str, object]:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     return {
@@ -767,32 +837,52 @@ def auto_plist(interval: int, cooldown: int) -> dict[str, object]:
 
 
 def cmd_install_auto(args: argparse.Namespace):
-    if sys.platform != "darwin" and os.environ.get("THREAD_RESTORE_ALLOW_NON_DARWIN") != "1":
-        sys.exit("Error: install-auto currently supports macOS LaunchAgent only")
     if args.interval < 5:
         sys.exit("Error: --interval must be at least 5 seconds")
     if args.cooldown < 0:
         sys.exit("Error: --cooldown must be non-negative")
 
-    payload = plistlib.dumps(auto_plist(args.interval, args.cooldown), sort_keys=True)
-    atomic_write_bytes(AUTO_PLIST_PATH, payload)
-    loaded = launchctl_bootstrap(AUTO_PLIST_PATH)
-    print(f"Installed auto restore LaunchAgent: {AUTO_PLIST_PATH}")
-    print(f"Mode: restore all active conversations after Codex starts or provider data changes")
-    print(f"LaunchAgent loaded: {'yes' if loaded else 'not loaded by this run'}")
+    if sys.platform == "win32" or os.environ.get("THREAD_RESTORE_ALLOW_WINDOWS") == "1":
+        atomic_write(WINDOWS_RUNNER_PATH, windows_runner(args.interval, args.cooldown))
+        loaded = schtasks_create(WINDOWS_RUNNER_PATH)
+        print(f"Installed auto restore scheduled task: {WINDOWS_TASK_NAME}")
+        print(f"Runner: {WINDOWS_RUNNER_PATH}")
+        print("Mode: restore all active conversations after Codex starts or provider data changes")
+        print(f"Scheduled task loaded: {'yes' if loaded else 'not loaded by this run'}")
+        return
+
+    if sys.platform == "darwin" or os.environ.get("THREAD_RESTORE_ALLOW_NON_DARWIN") == "1":
+        payload = plistlib.dumps(auto_plist(args.interval, args.cooldown), sort_keys=True)
+        atomic_write_bytes(AUTO_PLIST_PATH, payload)
+        loaded = launchctl_bootstrap(AUTO_PLIST_PATH)
+        print(f"Installed auto restore LaunchAgent: {AUTO_PLIST_PATH}")
+        print("Mode: restore all active conversations after Codex starts or provider data changes")
+        print(f"LaunchAgent loaded: {'yes' if loaded else 'not loaded by this run'}")
+        return
+
+    sys.exit("Error: install-auto supports macOS LaunchAgent and Windows Task Scheduler only")
 
 
 def cmd_uninstall_auto(_args: argparse.Namespace):
-    loaded = launchctl_bootout(AUTO_PLIST_PATH)
-    existed = AUTO_PLIST_PATH.exists()
-    AUTO_PLIST_PATH.unlink(missing_ok=True)
-    print(f"Removed auto restore LaunchAgent: {'yes' if existed else 'already absent'}")
-    print(f"LaunchAgent unloaded: {'yes' if loaded else 'not loaded or unavailable'}")
+    if sys.platform == "darwin" or AUTO_PLIST_PATH.exists():
+        loaded = launchctl_bootout(AUTO_PLIST_PATH)
+        existed = AUTO_PLIST_PATH.exists()
+        AUTO_PLIST_PATH.unlink(missing_ok=True)
+        print(f"Removed auto restore LaunchAgent: {'yes' if existed else 'already absent'}")
+        print(f"LaunchAgent unloaded: {'yes' if loaded else 'not loaded or unavailable'}")
+    if sys.platform == "win32" or WINDOWS_RUNNER_PATH.exists():
+        loaded = schtasks_delete()
+        existed = WINDOWS_RUNNER_PATH.exists()
+        WINDOWS_RUNNER_PATH.unlink(missing_ok=True)
+        print(f"Removed auto restore scheduled task runner: {'yes' if existed else 'already absent'}")
+        print(f"Scheduled task unloaded: {'yes' if loaded else 'not loaded or unavailable'}")
 
 
 def cmd_auto_status(_args: argparse.Namespace):
     print(f"LaunchAgent plist: {AUTO_PLIST_PATH}")
-    print(f"Installed: {'yes' if AUTO_PLIST_PATH.exists() else 'no'}")
+    print(f"LaunchAgent installed: {'yes' if AUTO_PLIST_PATH.exists() else 'no'}")
+    print(f"Windows scheduled task runner: {WINDOWS_RUNNER_PATH}")
+    print(f"Windows runner installed: {'yes' if WINDOWS_RUNNER_PATH.exists() else 'no'}")
     print(f"Codex running: {'yes' if codex_running() else 'no'}")
     state = read_auto_state()
     restored_at = state.get("restored_at")
@@ -827,13 +917,13 @@ def main():
     a.add_argument("--all", action="store_true", help="Restore all active conversations (default)")
     a.add_argument("--dry-run", action="store_true", help="Preview without changing files")
 
-    m = sub.add_parser("monitor", help="Internal LaunchAgent monitor")
+    m = sub.add_parser("monitor", help="Internal startup monitor")
     m.add_argument("--interval", type=int, default=30, help=argparse.SUPPRESS)
     m.add_argument("--cooldown", type=int, default=120, help=argparse.SUPPRESS)
-    ia = sub.add_parser("install-auto", help="Install macOS LaunchAgent auto restore")
+    ia = sub.add_parser("install-auto", help="Install startup auto restore")
     ia.add_argument("--interval", type=int, default=30, help="Monitor interval in seconds (default: 30)")
     ia.add_argument("--cooldown", type=int, default=120, help="Minimum seconds between restores")
-    sub.add_parser("uninstall-auto", help="Remove macOS LaunchAgent auto restore")
+    sub.add_parser("uninstall-auto", help="Remove startup auto restore")
     sub.add_parser("auto-status", help="Show auto restore status")
 
     command_names = {
