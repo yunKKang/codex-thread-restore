@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import shutil
 import sqlite3
 import subprocess
@@ -25,6 +26,21 @@ def run(
     return subprocess.run(
         [sys.executable, str(RESTORE), *args],
         check=True,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+
+def run_unchecked(
+    codex_home: Path, *args: str, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "CODEX_HOME": str(codex_home)}
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [sys.executable, str(RESTORE), *args],
+        check=False,
         env=env,
         text=True,
         capture_output=True,
@@ -354,6 +370,81 @@ def main():
         assert providers["sqlite-hit"] == "chatgpt"
     finally:
         shutil.rmtree(filename_home.parent)
+
+    launch_home = make_small_home()
+    launch_root = Path(tempfile.mkdtemp(prefix="thread-restore-launch."))
+    try:
+        launch_agents = launch_root / "LaunchAgents"
+        install = run(
+            launch_home,
+            "install-auto",
+            "--interval",
+            "15",
+            "--cooldown",
+            "45",
+            extra_env={
+                "THREAD_RESTORE_LAUNCH_AGENTS_DIR": str(launch_agents),
+                "THREAD_RESTORE_SKIP_LAUNCHCTL": "1",
+                "THREAD_RESTORE_ALLOW_NON_DARWIN": "1",
+            },
+        )
+        assert "Installed auto restore LaunchAgent" in install.stdout
+        plist_path = launch_agents / "com.codex.thread-restore.plist"
+        assert plist_path.exists()
+        plist = plistlib.loads(plist_path.read_bytes())
+        assert plist["Label"] == "com.codex.thread-restore"
+        assert plist["RunAtLoad"] is True
+        assert plist["KeepAlive"] is True
+        assert plist["EnvironmentVariables"]["CODEX_HOME"] == str(launch_home)
+        args = plist["ProgramArguments"]
+        assert args[0] == sys.executable
+        assert args[2:7] == ["monitor", "--interval", "15", "--cooldown", "45"]
+
+        status = run(
+            launch_home,
+            "auto-status",
+            extra_env={
+                "THREAD_RESTORE_LAUNCH_AGENTS_DIR": str(launch_agents),
+                "THREAD_RESTORE_SKIP_LAUNCHCTL": "1",
+                "THREAD_RESTORE_ALLOW_NON_DARWIN": "1",
+            },
+        )
+        assert "Installed: yes" in status.stdout
+
+        uninstall = run(
+            launch_home,
+            "uninstall-auto",
+            extra_env={
+                "THREAD_RESTORE_LAUNCH_AGENTS_DIR": str(launch_agents),
+                "THREAD_RESTORE_SKIP_LAUNCHCTL": "1",
+                "THREAD_RESTORE_ALLOW_NON_DARWIN": "1",
+            },
+        )
+        assert "Removed auto restore LaunchAgent: yes" in uninstall.stdout
+        assert not plist_path.exists()
+    finally:
+        shutil.rmtree(launch_home.parent)
+        shutil.rmtree(launch_root)
+
+    invalid_launch_home = make_small_home()
+    invalid_root = Path(tempfile.mkdtemp(prefix="thread-restore-invalid-launch."))
+    try:
+        invalid = run_unchecked(
+            invalid_launch_home,
+            "install-auto",
+            "--interval",
+            "4",
+            extra_env={
+                "THREAD_RESTORE_LAUNCH_AGENTS_DIR": str(invalid_root),
+                "THREAD_RESTORE_SKIP_LAUNCHCTL": "1",
+                "THREAD_RESTORE_ALLOW_NON_DARWIN": "1",
+            },
+        )
+        assert invalid.returncode != 0
+        assert "--interval must be at least 5 seconds" in invalid.stderr
+    finally:
+        shutil.rmtree(invalid_launch_home.parent)
+        shutil.rmtree(invalid_root)
     print("tests ok")
 
 

@@ -11,6 +11,7 @@ Usage:
     python3 restore.py restore --all    # restore all
     python3 restore.py verify           # check consistency
     python3 restore.py show             # list threads
+    python3 restore.py install-auto      # install macOS startup monitor
 """
 
 from __future__ import annotations
@@ -18,9 +19,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import plistlib
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -36,8 +39,14 @@ SESSIONS_DIR = CODEX_HOME / "sessions"
 ARCHIVED_DIR = CODEX_HOME / "archived_sessions"
 BACKUP_DIR = CODEX_HOME / "backups"
 LOCK_PATH = CODEX_HOME / "thread-restore.lock"
+LOG_DIR = CODEX_HOME / "logs"
+AUTO_LABEL = "com.codex.thread-restore"
+LAUNCH_AGENTS_DIR = Path(
+    os.environ.get("THREAD_RESTORE_LAUNCH_AGENTS_DIR", Path.home() / "Library" / "LaunchAgents")
+).expanduser()
+AUTO_PLIST_PATH = LAUNCH_AGENTS_DIR / f"{AUTO_LABEL}.plist"
 SKIP_TITLE_PATTERNS = ("%Uncaught Exception%", "%Memory Writing%")
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 def get_provider() -> str:
@@ -109,9 +118,24 @@ def get_db() -> sqlite3.Connection:
 
 
 def atomic_write(path: Path, content: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def atomic_write_bytes(path: Path, content: bytes):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
@@ -597,6 +621,188 @@ def cmd_auto(args: argparse.Namespace):
     cmd_now(args)
 
 
+def codex_running() -> bool:
+    try:
+        proc = subprocess.run(
+            ["pgrep", "-x", "Codex"],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        return False
+    return proc.returncode == 0 and bool(proc.stdout.strip())
+
+
+def auto_state_path() -> Path:
+    return CODEX_HOME / "thread-restore.auto-state.json"
+
+
+def read_auto_state() -> dict[str, object]:
+    path = auto_state_path()
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def write_auto_state(state: dict[str, object]):
+    atomic_write(auto_state_path(), json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def auto_signature() -> dict[str, object]:
+    paths = [CONFIG_PATH, DB_PATH, INDEX_PATH]
+    signature: dict[str, object] = {"provider": None, "files": {}}
+    try:
+        signature["provider"] = get_provider()
+    except SystemExit:
+        signature["provider"] = None
+    files = {}
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            files[str(path)] = None
+        else:
+            files[str(path)] = [stat.st_mtime_ns, stat.st_size]
+    signature["files"] = files
+    return signature
+
+
+def cmd_monitor(args: argparse.Namespace):
+    interval = args.interval
+    if interval < 5:
+        sys.exit("Error: --interval must be at least 5 seconds")
+
+    last_signature = None
+    last_restore = 0.0
+    state = read_auto_state()
+    if state.get("signature"):
+        last_signature = state["signature"]
+    if isinstance(state.get("restored_at"), int):
+        last_restore = float(state["restored_at"])
+    was_running = False
+    print(f"Auto monitor started. Checking every {interval}s.")
+    while True:
+        running = codex_running()
+        signature = auto_signature()
+        changed = signature != last_signature
+        started = running and not was_running
+        cooled_down = time.time() - last_restore >= args.cooldown
+        if running and (started or (changed and cooled_down)):
+            print("Codex activity/config change detected; running one-shot restore.")
+            restore_args = argparse.Namespace(n=None, all=True, dry_run=False)
+            try:
+                cmd_now(restore_args)
+            except BaseException as e:
+                print(f"Auto restore failed: {e}", file=sys.stderr)
+            else:
+                last_signature = auto_signature()
+                last_restore = time.time()
+                write_auto_state({"signature": last_signature, "restored_at": int(last_restore)})
+        elif changed and not running:
+            last_signature = signature
+            write_auto_state({"signature": last_signature, "restored_at": state.get("restored_at")})
+        was_running = running
+        sys.stdout.flush()
+        time.sleep(interval)
+
+
+def launchctl_bootstrap(plist_path: Path) -> bool:
+    if sys.platform != "darwin" or os.environ.get("THREAD_RESTORE_SKIP_LAUNCHCTL") == "1":
+        return False
+    uid = os.getuid()
+    subprocess.run(["launchctl", "bootout", f"gui/{uid}", str(plist_path)], check=False)
+    proc = subprocess.run(
+        ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        print(proc.stderr.strip() or proc.stdout.strip(), file=sys.stderr)
+        return False
+    subprocess.run(["launchctl", "enable", f"gui/{uid}/{AUTO_LABEL}"], check=False)
+    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{uid}/{AUTO_LABEL}"], check=False)
+    return True
+
+
+def launchctl_bootout(plist_path: Path) -> bool:
+    if sys.platform != "darwin" or os.environ.get("THREAD_RESTORE_SKIP_LAUNCHCTL") == "1":
+        return False
+    uid = os.getuid()
+    proc = subprocess.run(
+        ["launchctl", "bootout", f"gui/{uid}", str(plist_path)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return proc.returncode == 0
+
+
+def auto_plist(interval: int, cooldown: int) -> dict[str, object]:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    return {
+        "Label": AUTO_LABEL,
+        "ProgramArguments": [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "monitor",
+            "--interval",
+            str(interval),
+            "--cooldown",
+            str(cooldown),
+        ],
+        "EnvironmentVariables": {
+            "CODEX_HOME": str(CODEX_HOME),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+        },
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "StandardOutPath": str(LOG_DIR / "thread-restore.auto.log"),
+        "StandardErrorPath": str(LOG_DIR / "thread-restore.auto.err.log"),
+    }
+
+
+def cmd_install_auto(args: argparse.Namespace):
+    if sys.platform != "darwin" and os.environ.get("THREAD_RESTORE_ALLOW_NON_DARWIN") != "1":
+        sys.exit("Error: install-auto currently supports macOS LaunchAgent only")
+    if args.interval < 5:
+        sys.exit("Error: --interval must be at least 5 seconds")
+    if args.cooldown < 0:
+        sys.exit("Error: --cooldown must be non-negative")
+
+    payload = plistlib.dumps(auto_plist(args.interval, args.cooldown), sort_keys=True)
+    atomic_write_bytes(AUTO_PLIST_PATH, payload)
+    loaded = launchctl_bootstrap(AUTO_PLIST_PATH)
+    print(f"Installed auto restore LaunchAgent: {AUTO_PLIST_PATH}")
+    print(f"Mode: restore all active conversations after Codex starts or provider data changes")
+    print(f"LaunchAgent loaded: {'yes' if loaded else 'not loaded by this run'}")
+
+
+def cmd_uninstall_auto(_args: argparse.Namespace):
+    loaded = launchctl_bootout(AUTO_PLIST_PATH)
+    existed = AUTO_PLIST_PATH.exists()
+    AUTO_PLIST_PATH.unlink(missing_ok=True)
+    print(f"Removed auto restore LaunchAgent: {'yes' if existed else 'already absent'}")
+    print(f"LaunchAgent unloaded: {'yes' if loaded else 'not loaded or unavailable'}")
+
+
+def cmd_auto_status(_args: argparse.Namespace):
+    print(f"LaunchAgent plist: {AUTO_PLIST_PATH}")
+    print(f"Installed: {'yes' if AUTO_PLIST_PATH.exists() else 'no'}")
+    print(f"Codex running: {'yes' if codex_running() else 'no'}")
+    state = read_auto_state()
+    restored_at = state.get("restored_at")
+    if isinstance(restored_at, int):
+        stamp = datetime.fromtimestamp(restored_at).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"Last auto restore: {stamp}")
+    else:
+        print("Last auto restore: unknown")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Codex conversation restore tool")
     parser.add_argument("--version", action="version", version=f"thread-restore {VERSION}")
@@ -616,12 +822,32 @@ def main():
     n.add_argument("-n", type=int, help="Recent active conversation count (default: all)")
     n.add_argument("--all", action="store_true", help="Restore all active conversations (default)")
     n.add_argument("--dry-run", action="store_true", help="Preview without changing files")
-    a = sub.add_parser("auto", help="Alias for now; no background process is installed")
+    a = sub.add_parser("auto", help="Compatibility alias for now")
     a.add_argument("-n", type=int, help="Recent active conversation count (default: all)")
     a.add_argument("--all", action="store_true", help="Restore all active conversations (default)")
     a.add_argument("--dry-run", action="store_true", help="Preview without changing files")
 
-    command_names = {"restore", "verify", "verify-all", "show", "now", "auto"}
+    m = sub.add_parser("monitor", help="Internal LaunchAgent monitor")
+    m.add_argument("--interval", type=int, default=30, help=argparse.SUPPRESS)
+    m.add_argument("--cooldown", type=int, default=120, help=argparse.SUPPRESS)
+    ia = sub.add_parser("install-auto", help="Install macOS LaunchAgent auto restore")
+    ia.add_argument("--interval", type=int, default=30, help="Monitor interval in seconds (default: 30)")
+    ia.add_argument("--cooldown", type=int, default=120, help="Minimum seconds between restores")
+    sub.add_parser("uninstall-auto", help="Remove macOS LaunchAgent auto restore")
+    sub.add_parser("auto-status", help="Show auto restore status")
+
+    command_names = {
+        "restore",
+        "verify",
+        "verify-all",
+        "show",
+        "now",
+        "auto",
+        "monitor",
+        "install-auto",
+        "uninstall-auto",
+        "auto-status",
+    }
     argv = sys.argv[1:]
     if argv and argv[0] in {"-h", "--help", "--version"}:
         args = parser.parse_args(argv)
@@ -641,6 +867,10 @@ def main():
         "show": cmd_show,
         "now": cmd_now,
         "auto": cmd_auto,
+        "monitor": cmd_monitor,
+        "install-auto": cmd_install_auto,
+        "uninstall-auto": cmd_uninstall_auto,
+        "auto-status": cmd_auto_status,
     }
     if args.command in dispatch:
         dispatch[args.command](args)

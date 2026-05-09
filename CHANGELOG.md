@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 - 2026-05-09
+
+- Add explicit macOS `install-auto`, `auto-status`, and `uninstall-auto` commands.
+- Install a user LaunchAgent that starts a lightweight monitor at login.
+- Run one-shot restore when Codex is running and provider/index data changes.
+- Keep `auto` as a compatibility alias for `now`.
+- Cover LaunchAgent generation and uninstall behavior in tests.
+
 ## 0.2.0 - 2026-05-06
 
 - Change the default command to a one-shot restore of all active conversations.

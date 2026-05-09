@@ -18,6 +18,9 @@ python3 ~/.codex/skills/thread-restore/restore.py restore --all
 python3 ~/.codex/skills/thread-restore/restore.py verify
 python3 ~/.codex/skills/thread-restore/restore.py show
 python3 ~/.codex/skills/thread-restore/restore.py auto
+python3 ~/.codex/skills/thread-restore/restore.py install-auto
+python3 ~/.codex/skills/thread-restore/restore.py auto-status
+python3 ~/.codex/skills/thread-restore/restore.py uninstall-auto
 ```
 
 ## Rules
@@ -30,6 +33,10 @@ python3 ~/.codex/skills/thread-restore/restore.py auto
 - Match rollout files by header ID or filename.
 - Tell the user to restart Codex Desktop after restore.
 - Backups are created under `~/.codex/backups/restore.*`.
-- `auto` is only a compatibility alias for `now`; do not install background polling.
+- `auto` is only a compatibility alias for `now`.
+- Install startup automation only when explicitly requested. On macOS,
+  `install-auto` creates a LaunchAgent that runs the monitor at login and
+  restores all active conversations after Codex starts or provider data changes.
+- Use `auto-status` to inspect the LaunchAgent and `uninstall-auto` to remove it.
 - Works on macOS and Windows when `CODEX_HOME` or the default `~/.codex` directory
   points to the Codex data folder.

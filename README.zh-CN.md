@@ -27,14 +27,31 @@ python3 restore.py restore -n 10
 python3 restore.py restore --all
 python3 restore.py verify
 python3 restore.py show
-python3 restore.py auto        # now 的兼容别名，不安装后台任务
+python3 restore.py auto        # now 的兼容别名
+python3 restore.py install-auto
+python3 restore.py auto-status
+python3 restore.py uninstall-auto
 ```
 
 恢复后重启 Codex Desktop。
 
-默认命令是一次性执行，不安装后台轮询，也不会每隔一段时间检测。它会先检查是否真的
-需要恢复；如果已经一致，不会创建新备份。真正的“Codex 启动后自动触发一次”需要桌面端
-提供启动 hook；这个 skill 侧保持为 agent 触发后立即执行，执行完重启 Codex 即可看到恢复结果。
+默认命令是一次性执行。它会先检查是否真的需要恢复；如果已经一致，不会创建新备份。
+
+如需在每次登录后自动同步，可在 macOS 上显式安装 LaunchAgent：
+
+```bash
+python3 restore.py install-auto
+python3 restore.py auto-status
+python3 restore.py uninstall-auto
+```
+
+`install-auto` 会安装 `~/Library/LaunchAgents/com.codex.thread-restore.plist`。
+它在登录时启动一个轻量 monitor，检测到 Codex 正在运行且 provider/索引数据变化后，
+自动执行一次 `now`，恢复全部活跃对话。日志写入 `~/.codex/logs/thread-restore.auto.log`
+和 `~/.codex/logs/thread-restore.auto.err.log`。
+
+这不是 Codex Desktop 内部启动 hook，而是 macOS 用户级 LaunchAgent；Windows 端仍保持
+手动一次性恢复。
 
 Windows 端可在同一目录运行：
 
@@ -51,7 +68,8 @@ py -3 restore.py verify
 - 所有 provider 的对话放在一起全局排序。
 - rollout 文件可通过 header ID 或文件名匹配线程。
 - 默认范围是全部活跃对话；`restore -n 10` 可显式恢复最近 10 个。
-- `auto` 只是 `now` 的兼容别名，不会创建后台任务。
+- `auto` 只是 `now` 的兼容别名。
+- `install-auto` 只有用户显式执行时才会创建后台 LaunchAgent。
 - 备份写入 `~/.codex/backups/restore.*`。
 - 恢复失败时会自动拷回最新备份。
 - 无第三方 Python 依赖。
